@@ -1,12 +1,14 @@
-name: Release Workflow
+# FORK: Disabled - no PyPI publishing from fork
+# Original trigger: on: push: tags: - "*"
+
+name: Release Workflow (DISABLED IN FORK)
 
 on:
-  push:
-    tags:
-      - "*"
+  workflow_dispatch:  # Manual trigger only, if ever needed
 
 jobs:
   release-to-pypi:
+    if: false  # FORK: Never run automatically
     environment: release-approval
     runs-on: ubuntu-latest
     permissions:

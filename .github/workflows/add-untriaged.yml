@@ -1,14 +1,17 @@
-name: Apply 'untriaged' label during issue lifecycle
+# FORK: Disabled - OpenSearch project-specific issue triage
+# Original trigger: on: issues: types: [opened, reopened, transferred]
+
+name: Apply 'untriaged' label (DISABLED IN FORK)
 
 on:
-  issues:
-    types: [opened, reopened, transferred]
+  workflow_dispatch:  # Manual trigger only, if ever needed
 
 permissions:
   issues: write
 
 jobs:
   apply-label:
+    if: false  # FORK: Never run
     runs-on: ubuntu-latest
     steps:
       - name: Add `untriaged` Label
