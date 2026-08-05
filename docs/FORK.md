@@ -2,6 +2,12 @@
 
 > HRworks-Fork des OpenSearch MCP Servers mit OAuth-Support.
 
+## Aktueller Release
+
+| Tag | Datum | Basis | Beschreibung |
+|-----|-------|-------|--------------|
+| `v0.11.0-hrw1` | 2026-08-05 | 0.11.0 | OAuth-Integration (Upstream PR #227 + erweiterte Tests) |
+
 ## Upstream
 
 - **Repository:** https://github.com/opensearch-project/opensearch-mcp-server-py

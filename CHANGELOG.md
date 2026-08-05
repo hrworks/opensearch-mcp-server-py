@@ -12,6 +12,37 @@ Inspired from [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Removed
 
+---
+
+## [v0.11.0-hrw1] - 2026-08-05 (HRworks Fork)
+
+> **Fork Release** based on upstream [0.11.0](https://github.com/opensearch-project/opensearch-mcp-server-py/releases/tag/0.11.0)
+
+### From Upstream PR #227 (cwperks)
+
+- OAuth/OIDC authentication for MCP streaming transport
+- JWT bearer token validation via JWKS endpoint
+- Protected resource metadata endpoint (`/.well-known/oauth-protected-resource/mcp/`)
+- Environment variables: `MCP_OAUTH_ENABLED`, `MCP_OAUTH_ISSUER_URL`, `MCP_OAUTH_RESOURCE_URL`, `MCP_OAUTH_JWKS_URL`, `MCP_OAUTH_REQUIRED_SCOPES`, `MCP_OAUTH_AUDIENCE`
+
+### HRworks Additions
+
+- Extended unit tests for OAuth helper functions and configuration (+451 lines)
+- Security/negative tests for OAuth middleware (+900 lines)
+  - 401 scenarios (missing/invalid tokens, wrong issuer/audience)
+  - 403 scenarios (insufficient scopes)
+  - Attack prevention (alg:none, key confusion, JWKS failures)
+  - Route protection coverage
+
+### Test Results
+
+```
+697 passed, 4 skipped (full suite)
+120 passed, 1 skipped (OAuth-specific)
+```
+
+---
+
 ## [Released 0.11.0]
 
 ### Added
