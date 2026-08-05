@@ -265,7 +265,9 @@ class TestUnauthorized401:
         client, _, _, _ = oauth_app
 
         # Invalid base64 in the payload section
-        response = client.post('/mcp/', headers={'Authorization': 'Bearer eyJhbGciOiJSUzI1NiJ9.!!!invalid!!!.sig'})
+        response = client.post(
+            '/mcp/', headers={'Authorization': 'Bearer eyJhbGciOiJSUzI1NiJ9.!!!invalid!!!.sig'}
+        )
 
         assert response.status_code == 401
 
@@ -744,7 +746,9 @@ class TestSecurityCritical:
         # Must be rejected - server expects RS256, not HS256
         assert response.status_code == 401, 'HS256 tokens must be rejected when RS256 is expected'
 
-    def test_jwks_lookup_failure_rejects_token(self, mock_mcp_server, oauth_config, private_key_pem):
+    def test_jwks_lookup_failure_rejects_token(
+        self, mock_mcp_server, oauth_config, private_key_pem
+    ):
         """
         Token must be rejected when JWKS lookup fails.
 
@@ -759,8 +763,8 @@ class TestSecurityCritical:
 
         # Mock JWKS client to raise an exception (simulating network failure)
         with patch('mcp_server_opensearch.oauth.jwt.PyJWKClient') as mock_jwks_client:
-            mock_jwks_client.return_value.get_signing_key_from_jwt.side_effect = jwt.PyJWKClientError(
-                'JWKS endpoint unreachable'
+            mock_jwks_client.return_value.get_signing_key_from_jwt.side_effect = (
+                jwt.PyJWKClientError('JWKS endpoint unreachable')
             )
             app = app_handler.create_app()
             app.router.lifespan_context = None
