@@ -1,8 +1,7 @@
 # Copyright OpenSearch Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Auth negative tests for OAuth-protected routes.
+"""Auth negative tests for OAuth-protected routes.
 
 These tests verify that the OAuth middleware correctly rejects invalid
 authentication attempts and returns appropriate HTTP status codes and headers.
@@ -10,19 +9,16 @@ authentication attempts and returns appropriate HTTP status codes and headers.
 
 import base64
 import json
-import logging
-import time
-from typing import Generator
-from unittest.mock import AsyncMock, Mock, patch
-
 import jwt
+import logging
 import pytest
+import time
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from starlette.testclient import TestClient
-
 from mcp_server_opensearch.oauth import OAuthConfig
 from mcp_server_opensearch.streaming_server import MCPStarletteApp
+from starlette.testclient import TestClient
+from unittest.mock import AsyncMock, Mock, patch
 
 
 # =============================================================================
@@ -487,8 +483,7 @@ class TestRouteProtection:
         assert response.status_code != 401, f'{method} {path} should not require authentication'
 
     def test_route_table_coverage(self, oauth_app):
-        """
-        Verify that all routes in the app are covered by protection tests.
+        """Verify that all routes in the app are covered by protection tests.
 
         This test fails if a new route is added but not classified as
         protected or unprotected, ensuring no route accidentally becomes
@@ -673,16 +668,14 @@ class TestEdgeCases:
 
 
 class TestSecurityCritical:
-    """
-    Security-critical tests for JWT validation edge cases.
+    """Security-critical tests for JWT validation edge cases.
 
     These tests verify that common JWT security vulnerabilities are properly
     mitigated by the implementation.
     """
 
     def test_algorithm_none_rejected(self, oauth_app):
-        """
-        Token with alg=none must be rejected.
+        """Token with alg=none must be rejected.
 
         This tests against the classic JWT "algorithm none" attack where
         an attacker creates an unsigned token with {"alg": "none"}.
@@ -713,8 +706,7 @@ class TestSecurityCritical:
         assert response.status_code == 401, 'alg=none tokens must be rejected'
 
     def test_algorithm_hs256_with_rsa_key_rejected(self, oauth_app, public_key_pem):
-        """
-        Token signed with HS256 using public key as secret must be rejected.
+        """Token signed with HS256 using public key as secret must be rejected.
 
         This tests against the "algorithm confusion" attack where an attacker
         signs a token with HS256 using the RSA public key as the HMAC secret,
@@ -749,8 +741,7 @@ class TestSecurityCritical:
     def test_jwks_lookup_failure_rejects_token(
         self, mock_mcp_server, oauth_config, private_key_pem
     ):
-        """
-        Token must be rejected when JWKS lookup fails.
+        """Token must be rejected when JWKS lookup fails.
 
         If the JWKS endpoint is unreachable or returns an error, tokens
         should be rejected rather than accepted.
@@ -781,8 +772,7 @@ class TestSecurityCritical:
             assert response.status_code == 401, 'Token must be rejected when JWKS lookup fails'
 
     def test_token_with_wrong_kid_in_header(self, oauth_app, private_key_pem):
-        """
-        Document unit test limitation for kid validation.
+        """Document unit test limitation for kid validation.
 
         Note: With the current mock setup, the mock always returns the same key
         regardless of kid. This is a known limitation of unit tests.
@@ -832,8 +822,7 @@ class TestSecurityCritical:
         )
 
     def test_token_without_exp_claim_behavior(self, oauth_app, private_key_pem):
-        """
-        Document behavior of tokens without exp claim.
+        """Document behavior of tokens without exp claim.
 
         PyJWT with default options does NOT require exp claim.
         This test documents the current behavior. Whether this is a security
@@ -877,8 +866,7 @@ class TestSecurityCritical:
         )
 
     def test_token_with_future_nbf_rejected(self, oauth_app, private_key_pem):
-        """
-        Token with future nbf (not-before) should be rejected.
+        """Token with future nbf (not-before) should be rejected.
 
         The nbf claim specifies when the token becomes valid. Tokens with
         nbf in the future should be rejected.

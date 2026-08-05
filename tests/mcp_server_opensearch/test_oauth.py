@@ -6,11 +6,11 @@ import pytest
 from mcp_server_opensearch.oauth import (
     JwtTokenVerifier,
     OAuthConfig,
-    load_oauth_config,
+    _as_int,
+    _extract_scopes,
     _is_truthy,
     _split_scopes,
-    _extract_scopes,
-    _as_int,
+    load_oauth_config,
 )
 from unittest.mock import Mock, patch
 
@@ -311,11 +311,11 @@ class TestJwtTokenVerifier:
 
     @pytest.mark.asyncio
     async def test_verify_token_without_audience_disables_aud_verification(self):
-        """
-        SECURITY DOCUMENTATION: When audience is not configured, any valid token
-        from the issuer is accepted. This is intentional for setups where audience
-        restriction is not needed, but users should be aware this accepts a broader
-        set of tokens.
+        """SECURITY DOCUMENTATION: Audience bypass when not configured.
+
+        When audience is not configured, any valid token from the issuer is accepted.
+        This is intentional for setups where audience restriction is not needed,
+        but users should be aware this accepts a broader set of tokens.
         """
         config = OAuthConfig(
             enabled=True,
