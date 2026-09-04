@@ -229,6 +229,29 @@ class MCPStarletteApp:
                     resource_name='OpenSearch MCP Server',
                 )
             )
+            # HRW fix: patch the authorization_servers entry in the registered route's
+            # response so it contains the exact issuer string without a trailing slash.
+            # Pydantic's AnyHttpUrl normalizes bare-host URLs by appending '/', which
+            # causes issuer-equality checks in MCP clients (e.g. Kiro) to fail because
+            # Google's OIDC metadata reports issuer='https://accounts.google.com' (no slash).
+            _prm_route = routes[-1]
+            _original_handler = _prm_route.endpoint
+            _exact_issuer = self.oauth_config.issuer_url  # already stripped by load_oauth_config
+
+            async def _patched_prm(scope, receive, send):
+                import json as _json
+                from starlette.responses import JSONResponse
+                _resp = JSONResponse({
+                    'resource': str(resource_url),
+                    'authorization_servers': [_exact_issuer],
+                    'scopes_supported': required_scopes if required_scopes else None,
+                    'bearer_methods_supported': ['header'],
+                    'resource_name': 'OpenSearch MCP Server',
+                })
+                await _resp(scope, receive, send)
+
+            from starlette.routing import Route as _Route
+            routes[-1] = _Route(_prm_route.path, endpoint=_patched_prm, methods=['GET', 'OPTIONS'])
         else:
             routes.extend(
                 [
