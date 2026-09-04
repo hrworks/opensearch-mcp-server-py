@@ -3,6 +3,7 @@
 
 import jwt
 import pytest
+import time
 from mcp_server_opensearch.oauth import (
     JwtTokenVerifier,
     OAuthConfig,
@@ -12,7 +13,7 @@ from mcp_server_opensearch.oauth import (
     _split_scopes,
     load_oauth_config,
 )
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 class TestIsTruthy:
@@ -554,3 +555,210 @@ class TestJwtTokenVerifier:
             access_token = await verifier.verify_token('bad-token')
 
         assert access_token is None
+
+
+class TestGoogleOpaqueTokenFallback:
+    """Tests for the Google tokeninfo fallback path in JwtTokenVerifier."""
+
+    def _google_config(self, audience=None, required_scopes=None, issuer='https://accounts.google.com'):
+        return OAuthConfig(
+            enabled=True,
+            issuer_url=issuer,
+            resource_url='http://127.0.0.1:9900/mcp/',
+            jwks_url='https://www.googleapis.com/oauth2/v3/certs',
+            required_scopes=required_scopes or [],
+            audience=audience,
+        )
+
+    def _tokeninfo_response(self, overrides=None):
+        """Build a default valid Google tokeninfo response dict."""
+        future_exp = int(time.time()) + 3600
+        data = {
+            'aud': 'my-client-id.apps.googleusercontent.com',
+            'iss': 'accounts.google.com',
+            'sub': '10769150350006150715113082367',
+            'email': 'user@example.com',
+            'exp': str(future_exp),
+            'scope': 'openid email profile',
+            'azp': 'my-client-id.apps.googleusercontent.com',
+        }
+        if overrides:
+            data.update(overrides)
+        return data
+
+    @pytest.mark.asyncio
+    async def test_verify_opaque_token_google_tokeninfo_success(self):
+        """Opaque Google token is accepted when tokeninfo returns valid data."""
+        config = self._google_config(
+            audience='my-client-id.apps.googleusercontent.com',
+            required_scopes=['openid', 'email'],
+        )
+        tokeninfo = self._tokeninfo_response()
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = tokeninfo
+
+        with (
+            patch('mcp_server_opensearch.oauth.jwt.PyJWKClient') as mock_jwks_client,
+            patch('mcp_server_opensearch.oauth.httpx.AsyncClient') as mock_http_client_cls,
+        ):
+            mock_jwks_client.return_value.get_signing_key_from_jwt.side_effect = jwt.PyJWTError(
+                'Not enough segments'
+            )
+            mock_http_instance = AsyncMock()
+            mock_http_instance.__aenter__ = AsyncMock(return_value=mock_http_instance)
+            mock_http_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_http_instance.get = AsyncMock(return_value=mock_response)
+            mock_http_client_cls.return_value = mock_http_instance
+
+            verifier = JwtTokenVerifier(config)
+            access_token = await verifier.verify_token('ya29.opaque-token')
+
+        assert access_token is not None
+        assert access_token.token == 'ya29.opaque-token'
+        assert access_token.client_id == 'my-client-id.apps.googleusercontent.com'
+        assert 'openid' in access_token.scopes
+        assert 'email' in access_token.scopes
+        assert access_token.expires_at == int(tokeninfo['exp'])
+        assert access_token.resource == 'http://127.0.0.1:9900/mcp/'
+
+    @pytest.mark.asyncio
+    async def test_verify_opaque_token_wrong_audience_rejected(self):
+        """Opaque token is rejected when tokeninfo aud does not match configured audience."""
+        config = self._google_config(audience='expected-client-id')
+        tokeninfo = self._tokeninfo_response({'aud': 'different-client-id'})
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = tokeninfo
+
+        with (
+            patch('mcp_server_opensearch.oauth.jwt.PyJWKClient') as mock_jwks_client,
+            patch('mcp_server_opensearch.oauth.httpx.AsyncClient') as mock_http_client_cls,
+        ):
+            mock_jwks_client.return_value.get_signing_key_from_jwt.side_effect = jwt.PyJWTError(
+                'Not enough segments'
+            )
+            mock_http_instance = AsyncMock()
+            mock_http_instance.__aenter__ = AsyncMock(return_value=mock_http_instance)
+            mock_http_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_http_instance.get = AsyncMock(return_value=mock_response)
+            mock_http_client_cls.return_value = mock_http_instance
+
+            verifier = JwtTokenVerifier(config)
+            access_token = await verifier.verify_token('ya29.opaque-token')
+
+        assert access_token is None
+
+    @pytest.mark.asyncio
+    async def test_verify_opaque_token_network_error_returns_none(self):
+        """Network failure when calling tokeninfo endpoint returns None."""
+        import httpx as _httpx
+        config = self._google_config()
+
+        with (
+            patch('mcp_server_opensearch.oauth.jwt.PyJWKClient') as mock_jwks_client,
+            patch('mcp_server_opensearch.oauth.httpx.AsyncClient') as mock_http_client_cls,
+        ):
+            mock_jwks_client.return_value.get_signing_key_from_jwt.side_effect = jwt.PyJWTError(
+                'Not enough segments'
+            )
+            mock_http_instance = AsyncMock()
+            mock_http_instance.__aenter__ = AsyncMock(return_value=mock_http_instance)
+            mock_http_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_http_instance.get = AsyncMock(
+                side_effect=_httpx.ConnectError('Connection refused')
+            )
+            mock_http_client_cls.return_value = mock_http_instance
+
+            verifier = JwtTokenVerifier(config)
+            access_token = await verifier.verify_token('ya29.opaque-token')
+
+        assert access_token is None
+
+    @pytest.mark.asyncio
+    async def test_verify_opaque_token_expired_returns_none(self):
+        """Opaque token with past exp timestamp is rejected."""
+        config = self._google_config()
+        past_exp = int(time.time()) - 60
+        tokeninfo = self._tokeninfo_response({'exp': str(past_exp)})
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = tokeninfo
+
+        with (
+            patch('mcp_server_opensearch.oauth.jwt.PyJWKClient') as mock_jwks_client,
+            patch('mcp_server_opensearch.oauth.httpx.AsyncClient') as mock_http_client_cls,
+        ):
+            mock_jwks_client.return_value.get_signing_key_from_jwt.side_effect = jwt.PyJWTError(
+                'Not enough segments'
+            )
+            mock_http_instance = AsyncMock()
+            mock_http_instance.__aenter__ = AsyncMock(return_value=mock_http_instance)
+            mock_http_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_http_instance.get = AsyncMock(return_value=mock_response)
+            mock_http_client_cls.return_value = mock_http_instance
+
+            verifier = JwtTokenVerifier(config)
+            access_token = await verifier.verify_token('ya29.opaque-token')
+
+        assert access_token is None
+
+    @pytest.mark.asyncio
+    async def test_jwt_token_still_works_regression(self):
+        """Regular JWT tokens continue to work through the JWKS path (regression guard)."""
+        config = OAuthConfig(
+            enabled=True,
+            issuer_url='http://localhost:8080/realms/opensearch',
+            resource_url='http://127.0.0.1:9900/mcp/',
+            jwks_url='http://localhost:8080/realms/opensearch/protocol/openid-connect/certs',
+            required_scopes=['openid'],
+            audience='opensearch-mcp',
+        )
+        signing_key = Mock()
+        signing_key.key = 'public-key'
+
+        with (
+            patch('mcp_server_opensearch.oauth.jwt.PyJWKClient') as mock_jwks_client,
+            patch('mcp_server_opensearch.oauth.jwt.decode') as mock_decode,
+        ):
+            mock_jwks_client.return_value.get_signing_key_from_jwt.return_value = signing_key
+            mock_decode.return_value = {
+                'azp': 'opensearch-mcp',
+                'scope': 'openid profile',
+                'exp': 99999999,
+            }
+
+            verifier = JwtTokenVerifier(config)
+            access_token = await verifier.verify_token('eyJhbGciOiJSUzI1NiJ9.payload.sig')
+
+        assert access_token is not None
+        assert access_token.client_id == 'opensearch-mcp'
+        assert 'openid' in access_token.scopes
+        # Ensure tokeninfo was never called (httpx not used)
+        mock_decode.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_opaque_token_non_google_issuer_no_fallback(self):
+        """When issuer is not Google, JWT failure returns None without tokeninfo call."""
+        config = OAuthConfig(
+            enabled=True,
+            issuer_url='http://keycloak.example.com/realms/myapp',
+            resource_url='http://127.0.0.1:9900/mcp/',
+            jwks_url='http://keycloak.example.com/realms/myapp/protocol/openid-connect/certs',
+            required_scopes=[],
+        )
+
+        with (
+            patch('mcp_server_opensearch.oauth.jwt.PyJWKClient') as mock_jwks_client,
+            patch('mcp_server_opensearch.oauth.httpx.AsyncClient') as mock_http_client_cls,
+        ):
+            mock_jwks_client.return_value.get_signing_key_from_jwt.side_effect = jwt.PyJWTError(
+                'Not enough segments'
+            )
+
+            verifier = JwtTokenVerifier(config)
+            access_token = await verifier.verify_token('ya29.opaque-but-wrong-issuer')
+
+        assert access_token is None
+        # httpx.AsyncClient should never have been instantiated
+        mock_http_client_cls.assert_not_called()

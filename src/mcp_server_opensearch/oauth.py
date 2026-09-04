@@ -1,15 +1,20 @@
 # Copyright OpenSearch Contributors
 # SPDX-License-Identifier: Apache-2.0
 
+import httpx
 import jwt
 import logging
 import os
+import time
 from dataclasses import dataclass
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from typing import Any
 
 
 logger = logging.getLogger(__name__)
+
+_GOOGLE_ISSUERS = {'accounts.google.com', 'https://accounts.google.com'}
+_GOOGLE_TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo'
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -72,7 +77,12 @@ class JwtTokenVerifier(TokenVerifier):
         self._jwks_client = jwt.PyJWKClient(config.jwks_url)
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        """Verify a bearer token and return MCP access-token metadata."""
+        """Verify a bearer token and return MCP access-token metadata.
+
+        For standard OIDC JWTs: validates signature via JWKS, issuer, audience, and expiry.
+        For Google opaque tokens (ya29.xxx): falls back to Google's tokeninfo endpoint
+        when the configured issuer is accounts.google.com.
+        """
         try:
             signing_key = self._jwks_client.get_signing_key_from_jwt(token)
             payload = jwt.decode(
@@ -84,7 +94,10 @@ class JwtTokenVerifier(TokenVerifier):
                 options={'verify_aud': self.config.audience is not None},
             )
         except jwt.PyJWTError as e:
-            logger.debug('Bearer token verification failed: %s', e)
+            logger.debug('Bearer token JWT parsing failed: %s', e)
+            # Only fall back to Google tokeninfo if the configured issuer is Google
+            if self.config.issuer_url.rstrip('/') in _GOOGLE_ISSUERS:
+                return await self._verify_google_opaque_token(token)
             return None
 
         scopes = _extract_scopes(payload)
@@ -100,6 +113,81 @@ class JwtTokenVerifier(TokenVerifier):
             client_id=str(client_id),
             scopes=scopes,
             expires_at=_as_int(payload.get('exp')),
+            resource=self.config.resource_url,
+        )
+
+    async def _verify_google_opaque_token(self, token: str) -> AccessToken | None:
+        """Validate a Google opaque access token via the tokeninfo endpoint.
+
+        Called as fallback when JWT parsing fails and the issuer is Google.
+        Never logs the token value.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    _GOOGLE_TOKENINFO_URL,
+                    params={'access_token': token},
+                )
+        except httpx.HTTPError as e:
+            logger.debug('Google tokeninfo request failed: %s', type(e).__name__)
+            return None
+
+        if response.status_code != 200:
+            logger.debug('Google tokeninfo returned HTTP %d', response.status_code)
+            return None
+
+        try:
+            tokeninfo: dict[str, str] = response.json()
+        except Exception:
+            logger.debug('Google tokeninfo response is not valid JSON')
+            return None
+
+        # Issuer validation (trailing-slash-tolerant)
+        iss = tokeninfo.get('iss', '')
+        if iss.rstrip('/') not in _GOOGLE_ISSUERS:
+            logger.debug('Google tokeninfo iss mismatch: %s', iss)
+            return None
+        if self.config.issuer_url.rstrip('/') not in _GOOGLE_ISSUERS:
+            logger.debug('Configured issuer is not a Google issuer')
+            return None
+
+        # Audience validation
+        if self.config.audience is not None:
+            aud = tokeninfo.get('aud', '')
+            if aud != self.config.audience:
+                logger.debug('Google tokeninfo audience mismatch')
+                return None
+
+        # Expiry validation
+        exp_str = tokeninfo.get('exp', '')
+        try:
+            exp = int(exp_str)
+        except (ValueError, TypeError):
+            logger.debug('Google tokeninfo exp is missing or invalid')
+            return None
+        if exp <= time.time():
+            logger.debug('Google tokeninfo token is expired')
+            return None
+
+        # Scope validation
+        scope_str = tokeninfo.get('scope', '')
+        token_scopes = _split_scopes(scope_str)
+        for required in self.config.required_scopes:
+            if required not in token_scopes:
+                logger.debug('Google tokeninfo missing required scope: %s', required)
+                return None
+
+        client_id = (
+            tokeninfo.get('azp')
+            or tokeninfo.get('sub')
+            or 'unknown-client'
+        )
+
+        return AccessToken(
+            token=token,
+            client_id=str(client_id),
+            scopes=token_scopes,
+            expires_at=exp,
             resource=self.config.resource_url,
         )
 
