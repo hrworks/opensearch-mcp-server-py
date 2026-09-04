@@ -21,10 +21,8 @@ from pydantic import AnyHttpUrl
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.authentication import AuthenticationMiddleware
-from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-from starlette.routing import request_response
 from starlette.routing import Mount, Route
 from starlette.types import Receive, Scope, Send
 from tools.config import apply_custom_tool_config
@@ -100,56 +98,6 @@ class _ASGIApp:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await self._handler(scope, receive, send)
-
-
-def _create_protected_resource_routes_raw(
-    resource_url: AnyHttpUrl,
-    issuer_url: str,
-    scopes_supported: list[str] | None = None,
-) -> list[Route]:
-    """
-    Build RFC 9728 Protected Resource Metadata routes without Pydantic URL normalization.
-
-    Pydantic's AnyHttpUrl always appends a trailing slash to bare-host URLs
-    (e.g. "https://accounts.google.com" → "https://accounts.google.com/").
-    This breaks RFC 8414 issuer equality checks in OAuth clients that compare
-    the PRM authorization_server value against the OIDC metadata issuer field —
-    a mismatch causes the client to abort the OAuth flow with an auth error.
-
-    By serializing the authorization_servers list as a plain JSON string we
-    preserve the exact issuer URL from config without Pydantic normalization.
-    """
-    import json as _json
-    from urllib.parse import urlparse as _urlparse
-    from starlette.responses import JSONResponse
-
-    parsed = _urlparse(str(resource_url))
-    resource_path = parsed.path if parsed.path != '/' else ''
-    well_known_path = f'{parsed.scheme}://{parsed.netloc}/.well-known/oauth-protected-resource{resource_path}'
-    route_path = _urlparse(well_known_path).path
-
-    metadata: dict = {
-        'resource': str(resource_url),
-        'authorization_servers': [issuer_url],  # exact string, no Pydantic normalization
-        'bearer_methods_supported': ['header'],
-        'resource_name': 'OpenSearch MCP Server',
-    }
-    if scopes_supported:
-        metadata['scopes_supported'] = scopes_supported
-
-    metadata_json = _json.dumps(metadata)
-
-    async def handle(request: Request) -> Response:
-        return JSONResponse(content=_json.loads(metadata_json))
-
-    cors_handler = CORSMiddleware(
-        app=request_response(handle),
-        allow_origins='*',
-        allow_methods=['GET', 'OPTIONS'],
-        allow_headers=[],
-    )
-
-    return [Route(route_path, endpoint=cors_handler, methods=['GET', 'OPTIONS'])]
 
 
 class MCPStarletteApp:
@@ -273,18 +221,12 @@ class MCPStarletteApp:
                     ),
                 ]
             )
-            # HRW Fork Fix: Pydantic's AnyHttpUrl normalizes URLs by appending a
-            # trailing slash (e.g. "https://accounts.google.com" → "https://accounts.google.com/").
-            # This causes issuer validation to fail because Google's OIDC metadata reports
-            # issuer = "https://accounts.google.com" (no slash), while the PRM would advertise
-            # "https://accounts.google.com/" — breaking the RFC 8414 issuer equality check.
-            # Fix: build the metadata JSON manually so authorization_servers contains the
-            # exact issuer string from config, bypassing Pydantic URL normalization.
             routes.extend(
-                _create_protected_resource_routes_raw(
+                create_protected_resource_routes(
                     resource_url=resource_url,
-                    issuer_url=self.oauth_config.issuer_url,
+                    authorization_servers=[AnyHttpUrl(self.oauth_config.issuer_url)],
                     scopes_supported=required_scopes,
+                    resource_name='OpenSearch MCP Server',
                 )
             )
         else:
